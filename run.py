@@ -6,16 +6,16 @@ parser = argparse.ArgumentParser(prog="SpinlessFermions",
                                  epilog="and fin")
 #https://stackoverflow.com/questions/14117415/in-python-using-argparse-allow-only-positive-integers/14117567
 
-parser.add_argument("-N", "--num_fermions", type=int,   default=2,     help="Number of fermions in physical system")
-parser.add_argument("-H", "--num_hidden",   type=int,   default=64,    help="Number of hidden neurons per layer")
-parser.add_argument("-L", "--num_layers",   type=int,   default=2,     help="Number of layers within the network")
-parser.add_argument("-D", "--num_dets",     type=int,   default=1,     help="Number of determinants within the network's final layer")
-parser.add_argument("-V", "--V0",           type=float, default=0.,    help="Interaction strength (in harmonic units)")
-parser.add_argument("-S", "--sigma0",       type=float, default=0.5,   help="Interaction distance (in harmonic units")
-parser.add_argument("--preepochs",          type=int,   default=1000, help="Number of pre-epochs for the pretraining phase")
-parser.add_argument("--epochs",             type=int,   default=10000, help="Number of epochs for the energy minimisation phase")
-parser.add_argument("-C", "--chunks",       type=int,   default=1,     help="Number of chunks for vectorized operations")
-parser.add_argument("--dtype",                     type=str,   default='float32',      help='Default dtype')
+parser.add_argument("-N", "--num_fermions", type=int,   default=2,         help="Number of fermions in physical system")
+parser.add_argument("-H", "--num_hidden",   type=int,   default=64,        help="Number of hidden neurons per layer")
+parser.add_argument("-L", "--num_layers",   type=int,   default=2,         help="Number of layers within the network")
+parser.add_argument("-D", "--num_dets",     type=int,   default=1,         help="Number of determinants within the network's final layer")
+parser.add_argument("-V", "--V0",           type=float, default=0.,        help="Interaction strength (in harmonic units)")
+parser.add_argument("-S", "--sigma0",       type=float, default=0.5,       help="Interaction distance (in harmonic units")
+parser.add_argument("--preepochs",          type=int,   default=1000,      help="Number of pre-epochs for the pretraining phase")
+parser.add_argument("--epochs",             type=int,   default=10000,     help="Number of epochs for the energy minimisation phase")
+parser.add_argument("-C", "--chunks",       type=int,   default=1,         help="Number of chunks for vectorized operations")
+parser.add_argument("--dtype",              type=str,   default='float32', help='Default dtype')
 
 args = parser.parse_args()
 
@@ -192,7 +192,61 @@ net=output_dict['net']
 optim=output_dict['optim']
 sampler=output_dict['sampler']
 
+
+import matplotlib.pyplot as plt
+import numpy as np
+n_mesh = 100
+dummy_bounds = (-4, 4)
+dummy_space = torch.linspace(dummy_bounds[0], dummy_bounds[1], n_mesh, requires_grad=True, device=device)
+dummy_mesh = torch.cartesian_prod(*(dummy_space for _ in range(nfermions))).reshape(*(n_mesh for _ in range(nfermions)), nfermions)
+#dummy_mesh = torch.cartesian_prod(dummy_space, dummy_space).reshape(n_mesh, n_mesh, 2)
+#dummy_mesh = nn.functional.pad(dummy_mesh, (0, nfermions - 2, 0, 0, 0, 0), mode='constant', value=0)
+#for i, j in it.product(range(n_mesh), repeat=2):
+#    dummy_mesh[i, j, 4] = dummy_mesh[i, j, 2] = dummy_mesh[i, j, 0]
+#    dummy_mesh[i, j, 3] = dummy_mesh[i, j, 1]
+sign_psi, log_abs_psi = net(dummy_mesh)
+density_dum = 10**log_abs_psi.clone().cpu().detach().numpy() * sign_psi.clone().cpu().detach().numpy()
+x_plot = dummy_space.clone().cpu().detach().numpy()
+
+fig, ax = plt.subplots(nrows=1, ncols=2, figsize=(18, 5))
+ax1, ax2, *_ = ax
+
+fcont = ax1.contourf(x_plot, x_plot, density_dum, cmap='coolwarm')
+cont = ax1.contour(x_plot, x_plot, density_dum, colors='k')
+ax1.axis("square")
+bar = plt.colorbar(fcont)
+ax1.set_xlabel("Position, $x_1$")
+ax1.set_ylabel("Position, $x_2$")
+ax1.set_xlim(dummy_bounds)
+ax1.set_ylim(dummy_bounds)
+
+ax2.plot([], label='Loss')
+ax2.set_yscale('symlog')
+ax2.legend()
+
+fig.canvas.draw()
+plt.ion()
+plt.show()
+
+def update_plot(wf, e):
+    global fcont, cont, bar
+    fcont.remove(); cont.remove(); bar.remove()
+    fcont = ax1.contourf(x_plot, x_plot, wf, cmap='coolwarm')
+    cont = ax1.contour(x_plot, x_plot, wf, colors='k')
+    bar = plt.colorbar(fcont)
+
+    x = np.linspace(1, len(e), len(e))
+    ax2.set_xlim(0, len(e))
+    ax2.set_ylim(min(a for a in e if a != 0), max(e))
+    for line, y in zip(ax2.lines, [e]):
+        line.set_xdata(x)
+        line.set_ydata(y)
+
+    fig.canvas.draw()
+
+
 #Energy Minimisation
+loss_accum = []
 for epoch in range(start, epochs+1):
     stats={}
 
@@ -218,6 +272,13 @@ for epoch in range(start, epochs+1):
     optim.step()
 
     end = sync_time()
+
+    loss_accum.append(loss.item())
+    if epoch % 10 == 0:
+        sign_psi, log_abs_psi = net(dummy_mesh)
+        density_dum = 10**log_abs_psi.clone().cpu().detach().numpy() * sign_psi.clone().cpu().detach().numpy()
+        update_plot(density_dum, loss_accum)
+    plt.pause(0.001)
 
     stats['epoch'] = [epoch] #must pass index
     stats['loss'] = loss.item()
@@ -248,3 +309,7 @@ for epoch in range(start, epochs+1):
     sys.stdout.flush()
 
 print("\nDone")
+#sign_psi, log_abs_psi = net(dummy_mesh)
+#density_dum = 10**log_abs_psi.detach().numpy() * sign_psi.detach().numpy()
+#update_plot(density_dum, [1])
+input()
