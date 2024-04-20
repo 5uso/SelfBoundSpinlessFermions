@@ -13,7 +13,8 @@ parser.add_argument("-D", "--num_dets",     type=int,   default=1,         help=
 parser.add_argument("-V", "--V0",           type=float, default=0.,        help="Interaction strength (in harmonic units)")
 parser.add_argument("-S", "--sigma0",       type=float, default=0.5,       help="Interaction distance (in harmonic units")
 parser.add_argument("--preepochs",          type=int,   default=1000,      help="Number of pre-epochs for the pretraining phase")
-parser.add_argument("--epochs",             type=int,   default=10000,     help="Number of epochs for the energy minimisation phase")
+parser.add_argument("--epochs",             type=int,   default=2000,      help="Number of epochs for the energy minimisation phase")
+parser.add_argument("--postepochs",         type=int,   default=2000,      help="Number of epochs for the free phase")
 parser.add_argument("-C", "--chunks",       type=int,   default=1,         help="Number of chunks for vectorized operations")
 parser.add_argument("--dtype",              type=str,   default='float32', help='Default dtype')
 
@@ -70,6 +71,7 @@ nchunks=1
 
 preepochs=args.preepochs
 epochs=args.epochs
+postepochs=args.postepochs
 
 net = vLogHarmonicNet(num_input=nfermions,
                       num_hidden=num_hidden,
@@ -273,7 +275,94 @@ for epoch in range(start, epochs+1):
 
     end = sync_time()
 
-    loss_accum.append(loss.item())
+    loss_accum.append(abs(loss.item()))
+    if epoch % 10 == 0:
+        sign_psi, log_abs_psi = net(dummy_mesh)
+        density_dum = 10**log_abs_psi.clone().cpu().detach().numpy() * sign_psi.clone().cpu().detach().numpy()
+        update_plot(density_dum, loss_accum)
+    plt.pause(0.001)
+
+    stats['epoch'] = [epoch] #must pass index
+    stats['loss'] = loss.item()
+    stats['energy_mean'] = energy_mean.item()
+    stats['energy_std'] = energy_std.item()
+    stats['CI'] = gs_CI
+    stats['proposal_width'] = sampler.sigma.item()
+    stats['acceptance_rate'] = sampler.acceptance_rate
+
+    stats['walltime'] = end-start
+
+    writer(stats)
+
+    if(epoch % em_save_every_ith == 0):
+        torch.save({'epoch':epoch,
+                    'model_state_dict':net.state_dict(),
+                    'optim_state_dict':optim.state_dict(),
+                    'loss':loss,
+                    'energy':energy_mean,
+                    'energy_std':energy_var.sqrt(),
+                    'chains':sampler.chains.detach(),
+                    'log_prob':sampler.log_prob.detach(),
+                    'sigma':sampler.sigma},
+                    model_path)
+        writer.write_to_file(filename)
+
+    sys.stdout.write("Epoch: %6i | Energy: %6.4f +/- %6.4f | CI: %6.4f | Walltime: %4.2e (s)        \r" % (epoch, energy_mean, energy_std, gs_CI, end-start))
+    sys.stdout.flush()
+
+print("\n")
+
+###############################################################################################################################################
+#####                                                      NO TRAP LOOP                                                                   #####
+###############################################################################################################################################
+
+net.pretrain = False             # Pretrain still disabled
+calc_elocal.trap_enabled = False # Disable harmonic trap
+optim = torch.optim.Adam(params=net.parameters(), lr=1e-4) #new optimizer
+
+model_path = "results/notrap/checkpoints/A%02i_H%03i_L%02i_D%02i_%s_W%04i_P%06i_V%4.2e_S%4.2e_%s_PT_%s_device_%s_dtype_%s_chkp.pt" % \
+                (nfermions, num_hidden, num_layers, num_dets, func.__class__.__name__, nwalkers, preepochs, V0, sigma0, \
+                 optim.__class__.__name__, False, device, dtype)
+filename = "results/notrap/data/A%02i_H%03i_L%02i_D%02i_%s_W%04i_P%06i_V%4.2e_S%4.2e_%s_PT_%s_device_%s_dtype_%s.csv" % \
+                (nfermions, num_hidden, num_layers, num_dets, func.__class__.__name__, nwalkers, preepochs, V0, sigma0, \
+                 optim.__class__.__name__, False, device, dtype)
+
+writer = load_dataframe(filename)
+output_dict = load_model(model_path=model_path, device=device, net=net, optim=optim, sampler=sampler)
+
+start=output_dict['start'] #unpack dict
+net=output_dict['net']
+optim=output_dict['optim']
+sampler=output_dict['sampler']
+
+loss_accum = []
+for epoch in range(start, postepochs+1):
+    stats={}
+
+    start=sync_time()
+
+    x, _ = sampler(n_sweeps)
+
+    elocal = calc_elocal(x)
+    elocal = clip(elocal, clip_factor=5)
+
+    _, logabs = net(x)
+
+    loss_elocal = 2.*((elocal - torch.mean(elocal)).detach() * logabs)
+    
+    with torch.no_grad():
+        energy_var, energy_mean = torch.var_mean(elocal, unbiased=True)
+        energy_std = (energy_var / nwalkers).sqrt()
+
+    loss=torch.mean(loss_elocal)   
+    
+    optim.zero_grad()
+    loss.backward()  #populates leafs with grads
+    optim.step()
+
+    end = sync_time()
+
+    loss_accum.append(abs(loss.item()))
     if epoch % 10 == 0:
         sign_psi, log_abs_psi = net(dummy_mesh)
         density_dum = 10**log_abs_psi.clone().cpu().detach().numpy() * sign_psi.clone().cpu().detach().numpy()
