@@ -5,6 +5,7 @@ from torch import Tensor
 from typing import Callable, Tuple
 
 from Layers import EquivariantLayer, SlaterMultiDet, LogEnvelope, MatrixToSLogDeterminant
+from utils import trans_invar_subspace_proj
 
 class vLogHarmonicNet(nn.Module):
 
@@ -46,6 +47,9 @@ class vLogHarmonicNet(nn.Module):
         self.num_dets=num_dets
         self.func=func
         self.pretrain=pretrain
+        self.trans_invar=False
+
+        self.subspace_proj = torch.tensor(trans_invar_subspace_proj(num_input), dtype=torch.float32)
         
         layers = []
         layers.append(EquivariantLayer(in_features=2,
@@ -86,6 +90,7 @@ class vLogHarmonicNet(nn.Module):
         """
 
         h=x0.unsqueeze(-1)                #add feature dim (1d-systems only)
+        if self.trans_invar: h = torch.matmul(self.subspace_proj, h)
         x = self.func(self.layers[0](h))  #equivariant layers here... 
         for l in self.layers[1:-1]:       #(with residual connections)
             x = self.func(l(x)) + x
@@ -98,6 +103,11 @@ class vLogHarmonicNet(nn.Module):
         else:
             sign, logabsdet = self.slog_slater_det(matrices, log_envs)
             return sign, logabsdet
+        
+    def to(self, *args, **kwargs):
+        self = super().to(*args, **kwargs) 
+        self.subspace_proj = self.subspace_proj.to(*args, **kwargs) 
+        return self
 
 
 #No Backflow model
