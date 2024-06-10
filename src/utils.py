@@ -212,3 +212,26 @@ def str_with_err(value, error):
 
 def eyes_like(M: Tensor) -> Tensor:
     return torch.ones(*M.shape[0:-1], device=M.device, dtype=M.dtype).diag_embed()
+
+def trans_invar_rot(n):
+    main_diagonal = np.ones(n)
+    main_diagonal /= np.linalg.norm(main_diagonal)
+    aligned = np.zeros(n)
+    aligned[0] = 1
+
+    v = aligned - np.dot(main_diagonal, aligned) * main_diagonal
+    v /= np.linalg.norm(v)
+    cos = np.dot(main_diagonal, aligned)
+    sin = np.sqrt(1 - cos**2)
+
+    main_diagonal = np.expand_dims(main_diagonal, 0).T
+    v = np.expand_dims(v, 0).T
+    uv = np.concatenate((main_diagonal, v), axis=1)
+
+    return np.eye(n) - np.matmul(main_diagonal, main_diagonal.T) - np.matmul(v, v.T) + np.matmul(np.matmul(uv, np.array([[cos, -sin], [sin, cos]])), uv.T)
+
+def trans_invar_subspace_proj(n):
+    r = trans_invar_rot(n)
+    collapse = np.eye(n)
+    collapse[0, 0] = 0
+    return np.matmul(np.matmul(np.linalg.inv(r), collapse), r)
