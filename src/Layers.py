@@ -56,7 +56,8 @@ class EquivariantLayer(nn.Module):
     rep=[1 for _ in range(idx)]
     rep[-2] = self.num_particles
     
-    g = h.mean(dim=(idx-2), keepdim=True).repeat(*rep)
+    #g = h.mean(dim=(idx-2), keepdim=True).repeat(*rep)
+    g = h.pow(2).mean(dim=(idx-2), keepdim=True).sigmoid().repeat(*rep)
     f = torch.cat((h,g), dim=-1)
     return self.fc(f)
 
