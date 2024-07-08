@@ -12,8 +12,8 @@ parser.add_argument("-L", "--num_layers",   type=int,   default=2,         help=
 parser.add_argument("-D", "--num_dets",     type=int,   default=1,         help="Number of determinants within the network's final layer")
 parser.add_argument("-V", "--V0",           type=float, default=0.,        help="Interaction strength (in harmonic units)")
 parser.add_argument("-S", "--sigma0",       type=float, default=0.9,       help="Interaction distance (in harmonic units")
-parser.add_argument("--preepochs",          type=int,   default=1000,      help="Number of pre-epochs for the pretraining phase")
-parser.add_argument("--epochs",             type=int,   default=2100,      help="Number of epochs for the energy minimisation phase")
+parser.add_argument("--preepochs",          type=int,   default=3000,      help="Number of pre-epochs for the pretraining phase")
+parser.add_argument("--epochs",             type=int,   default=5000,      help="Number of epochs for the energy minimisation phase")
 parser.add_argument("--postepochs",         type=int,   default=30000,     help="Number of epochs for the free phase")
 parser.add_argument("-C", "--chunks",       type=int,   default=1,         help="Number of chunks for vectorized operations")
 parser.add_argument("--dtype",              type=str,   default='float32', help='Default dtype')
@@ -22,6 +22,7 @@ args = parser.parse_args()
 
 import torch
 from torch import nn, Tensor
+from math import isnan
 
 import os, sys, time
 import itertools as it
@@ -61,7 +62,7 @@ nwalkers=4096
 n_sweeps=20 #n_discard
 std=1.#0.02#1.
 target_acceptance=0.5
-use_rmsprop = True
+use_radamw = True
 
 V0 = args.V0
 sigma0 = args.sigma0
@@ -102,7 +103,7 @@ if True:
 
         HO = HermitePolynomialMatrix(num_particles=nfermions)
 
-        optim = torch.optim.RMSprop(params=net.parameters(), lr=1e-4, alpha=0.99, eps=1e-08, momentum=0.5) if use_rmsprop else torch.optim.Adam(params=net.parameters(), lr=1e-4) 
+        optim = torch.optim.RAdam(params=net.parameters(), lr=3e-4, eps=1e-06, decoupled_weight_decay=True) if use_radamw else torch.optim.Adam(params=net.parameters(), lr=1e-4) 
 
         gs_CI = get_groundstate(A=nfermions, V0=V0, datapath="groundstate/")
 
@@ -186,7 +187,7 @@ if True:
         ###############################################################################################################################################
 
         net.pretrain = False #check it's false
-        optim = torch.optim.RMSprop(params=net.parameters(), lr=1e-4, alpha=0.99, eps=1e-08, momentum=0.5) if use_rmsprop else torch.optim.Adam(params=net.parameters(), lr=1e-4) 
+        optim = torch.optim.RAdam(params=net.parameters(), lr=3e-4, eps=1e-06, decoupled_weight_decay=True) if use_radamw else torch.optim.Adam(params=net.parameters(), lr=1e-4) 
 
         model_path = "results/energy/checkpoints/A%02i_H%03i_L%02i_D%02i_%s_W%04i_P%06i_V%4.2e_S%4.2e_%s_PT_%s_device_%s_dtype_%s_chkp.pt" % \
                         (nfermions, num_hidden, num_layers, num_dets, func.__class__.__name__, nwalkers, preepochs, V0, sigma0, \
@@ -332,7 +333,7 @@ if True:
         net.trans_invar = True
         calc_elocal = HOw1D(net=net, V0=V0, sigma0=sigma0, nchunks=nchunks)
         calc_elocal.trap_enabled = False # Disable harmonic trap
-        optim = torch.optim.RMSprop(params=net.parameters(), lr=1e-4, alpha=0.99, eps=1e-08, momentum=0.5) if use_rmsprop else torch.optim.Adam(params=net.parameters(), lr=1e-4) 
+        optim = torch.optim.RAdam(params=net.parameters(), lr=3e-4, eps=1e-06, decoupled_weight_decay=True) if use_radamw else torch.optim.Adam(params=net.parameters(), lr=1e-4) 
 
         model_path = "results/notrap/checkpoints/A%02i_H%03i_L%02i_D%02i_%s_W%04i_P%06i_V%4.2e_S%4.2e_%s_PT_%s_device_%s_dtype_%s_chkp.pt" % \
                         (nfermions, num_hidden, num_layers, num_dets, func.__class__.__name__, nwalkers, preepochs, V0, sigma0, \
@@ -367,6 +368,8 @@ if True:
             with torch.no_grad():
                 energy_var, energy_mean = torch.var_mean(elocal, unbiased=True)
                 energy_std = (energy_var / nwalkers).sqrt()
+
+            if isnan(energy_mean.item()): break
 
             loss=torch.mean(loss_elocal)
             
